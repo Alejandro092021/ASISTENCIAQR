@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Escáner de Asistencia QR</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background-color: #f4f4f4; padding-top: 50px; }
+        #qr-reader { width: 500px; margin: auto; border: 5px solid #ccc; }
+        #qr-reader-results { font-size: 1.2em; margin-top: 20px; }
+        .success { color: green; font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+    {% csrf_token %}
+
+    <h1>Terminal de Asistencia</h1>
+    <div id="qr-reader"></div>
+    <div id="qr-reader-results">Escaneando...</div>
+
+    <script src="https://unpkg.com/html5-qrcode@2.0.9/dist/html5-qrcode.min.js"></script>
+
+    <script>
+        const resultContainer = document.getElementById('qr-reader-results');
+        // 👇 PASO 2.1: OBTÉN EL TOKEN DEL HTML 👇
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        let lastResult = null;
+
+        function onScanSuccess(decodedText, decodedResult) {
+            if (decodedText !== lastResult) {
+                lastResult = decodedText;
+                resultContainer.innerHTML = `Escaneado: <span class="success">${decodedText}</span>. Registrando...`;
+                
+                fetch('/api/asistencias/registrar/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        // 👇 PASO 2.2: AÑADE EL TOKEN A LOS ENCABEZADOS DE LA SOLICITUD 👇
+                        'X-CSRFToken': csrfToken
+                    },
+                    body: JSON.stringify({
+                        empleado_id: decodedText,
+                        tipo: 'entrada'
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        resultContainer.innerHTML = `<span class="error">Error: ${data.error}</span>`;
+                    } else {
+                        resultContainer.innerHTML = `<span class="success">¡Éxito! Asistencia registrada para ${data.nombre_empleado} (ID: ${data.empleado_id})</span>`;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    resultContainer.innerHTML = `<span class="error">Error de conexión con el servidor.</span>`;
+                });
+
+                setTimeout(() => { lastResult = null; }, 3000);
+            }
+        }
+
+        var html5QrcodeScanner = new Html5QrcodeScanner(
+            "qr-reader", { fps: 10, qrbox: 250 });
+        html5QrcodeScanner.render(onScanSuccess);
+    </script>
+</body>
+</html>

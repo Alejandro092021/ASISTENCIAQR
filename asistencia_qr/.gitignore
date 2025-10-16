@@ -1,0 +1,13 @@
+# Entorno virtual
+venv/
+*.pyc
+__pycache__/
+
+# Base de datos
+db.sqlite3
+
+# Archivos de entorno (si usas)
+.env
+
+# Archivos del sistema operativo
+.DS_Store

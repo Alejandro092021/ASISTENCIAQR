@@ -1,0 +1,32 @@
+{% extends "admin/index.html" %}
+{% load i18n %}
+
+{# Usamos el bloque 'branding' que es más seguro para añadir contenido al inicio #}
+{% block branding %}
+<style>
+    .scanner-button {
+        display: block;
+        width: 95%;
+        padding: 15px;
+        margin: 10px auto;
+        background-color: #417690;
+        color: white;
+        text-align: center;
+        font-size: 1.2em;
+        font-weight: bold;
+        border-radius: 8px;
+        text-decoration: none;
+        transition: background-color 0.3s;
+    }
+    .scanner-button:hover {
+        background-color: #345d73;
+    }
+</style>
+
+<a href="{% url 'scanner_page' %}" class="scanner-button" target="_blank">
+    {% trans '🚀 Iniciar Escáner de Asistencia' %}
+</a>
+
+{# Esta línea incluye el contenido original del bloque (el título del sitio) #}
+{{ block.super }}
+{% endblock %}
