@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Validación Facial</title>
+    <!-- Incluir Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Estilos base para Inter font */
+        body { font-family: 'Inter', sans-serif; }
+        /* Estilo para el contenedor del video */
+        #video-container {
+            position: relative;
+            width: 100%;
+            height: 256px; /* 64 * 4 = 256px, coincidiendo con h-64 de Tailwind */
+            overflow: hidden;
+            border-radius: 0.5rem; /* rounded-lg */
+        }
+        #video-stream {
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* Asegura que el video cubra el contenedor sin distorsionarse */
+            transform: scaleX(-1); /* Espejo horizontal para simular un selfie */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+
+    <!-- Se debe incluir el token CSRF para que el JavaScript lo lea y lo envíe en el POST -->
+    {% csrf_token %}
+
+    <!-- Tarjeta Principal de Validación -->
+    <div id="validation-card" class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md transition-all duration-300 transform scale-100">
+        <h1 class="text-3xl font-bold text-gray-800 mb-4 text-center">
+            Validación de Asistencia
+        </h1>
+        
+        <p class="text-lg text-gray-600 mb-6 text-center">
+            Bienvenido, <span id="empleado-nombre" class="font-extrabold text-blue-600">{{ empleado.nombre }}</span>.
+        </p>
+
+        <!-- Contenedor de la Cámara/Validación -->
+        <div id="video-container" class="bg-gray-800 flex items-center justify-center mb-6 shadow-inner border-2 border-gray-300">
+            <!-- Elemento de video real -->
+            <video id="video-stream" autoplay playsinline class="hidden"></video>
+            <!-- Mensaje de carga inicial -->
+            <p id="camera-loading-message" class="text-white font-medium p-4 text-center">
+                Cargando cámara... (Asegúrese de aceptar el permiso)
+            </p>
+        </div>
+
+        <!-- Mensaje de Estado (Display Dinámico) -->
+        <div id="status-message" class="p-3 mb-6 rounded-lg font-medium text-center bg-blue-100 text-blue-700 border border-blue-300">
+            Esperando validación facial...
+        </div>
+
+        <!-- Botón de Registro (Activado después de la validación exitosa o de forma manual) -->
+        <button id="register-button" 
+                disabled
+                class="w-full py-3 bg-gray-400 text-white font-bold rounded-lg shadow-lg transition duration-150 transform focus:outline-none focus:ring-4 focus:ring-green-300">
+            Registrar Asistencia
+        </button>
+        
+        <div id="loading-indicator" class="hidden text-center mt-4 text-green-600 font-medium">
+            Procesando...
+        </div>
+
+    </div>
+
+    <script>
+        // La URL de registro es inyectada por Django desde la vista
+        const FINAL_REGISTER_URL = '{{ registro_url | safe }}';
+        
+        // Obtenemos el token CSRF (debe existir en la plantilla que llamó a esta vista)
+        const csrfTokenElement = document.querySelector('[name=csrfmiddlewaretoken]');
+        // Usamos un operador ternario para una lectura segura, evitando el TypeError
+        const csrfToken = csrfTokenElement ? csrfTokenElement.value : '';
+
+        const registerButton = document.getElementById('register-button');
+        const statusMsg = document.getElementById('status-message');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const videoElement = document.getElementById('video-stream');
+        const cameraMessage = document.getElementById('camera-loading-message');
+
+        let cameraActive = false;
+        
+        // --- UTILIDAD: Actualiza el estado en la interfaz ---
+        function updateStatus(message, type = 'info') {
+            statusMsg.textContent = message;
+            statusMsg.className = 'p-3 mb-6 rounded-lg font-medium text-center border transition-colors duration-200';
+            
+            if (type === 'success') {
+                statusMsg.classList.add('bg-green-100', 'text-green-700', 'border-green-300');
+            } else if (type === 'error') {
+                statusMsg.classList.add('bg-red-100', 'text-red-700', 'border-red-300');
+            } else { // info / default
+                statusMsg.classList.add('bg-blue-100', 'text-blue-700', 'border-blue-300');
+            }
+        }
+
+        // --- FUNCIÓN DE INICIALIZACIÓN DE CÁMARA ---
+        async function startCamera() {
+            if (cameraActive) return;
+
+            try {
+                updateStatus('Cargando cámara...', 'info');
+                cameraMessage.textContent = 'Solicitando permiso de cámara...';
+                
+                // Pedir acceso a la cámara de video
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                
+                // Asignar el stream al elemento de video
+                videoElement.srcObject = stream;
+                videoElement.onloadedmetadata = () => {
+                    videoElement.play();
+                    // Mostrar video y ocultar mensaje
+                    videoElement.classList.remove('hidden');
+                    cameraMessage.classList.add('hidden');
+                    cameraActive = true;
+                    
+                    updateStatus('Cámara activa. Presione "Registrar Asistencia" para continuar.', 'info');
+                    // Simular que la validación facial fue exitosa (Activamos el botón)
+                    registerButton.disabled = false;
+                    registerButton.classList.remove('bg-gray-400');
+                    registerButton.classList.add('bg-green-600', 'hover:bg-green-700');
+                };
+            } catch (error) {
+                console.error('[ERROR CÁMARA]: Error al acceder a la cámara:', error);
+                let errorMessage = 'Error al acceder a la cámara. Asegúrese de que no esté en uso.';
+
+                if (error.name === 'NotAllowedError') {
+                    errorMessage = 'Permiso denegado: Debe permitir el acceso a la cámara para continuar.';
+                } else if (error.name === 'NotFoundError') {
+                    errorMessage = 'No se encontró ninguna cámara disponible.';
+                }
+                
+                cameraMessage.textContent = errorMessage;
+                updateStatus(`❌ ${errorMessage}`, 'error');
+                
+                // Dejamos el botón deshabilitado si la cámara no funciona
+                registerButton.disabled = true;
+                registerButton.classList.remove('bg-green-600', 'hover:bg-green-700');
+                registerButton.classList.add('bg-gray-400');
+            }
+        }
+
+        // --- FUNCIÓN DE REGISTRO DE ASISTENCIA ---
+        async function registerAttendance() {
+            if (!csrfToken) {
+                updateStatus('Error de seguridad: Token CSRF no disponible.', 'error');
+                return;
+            }
+
+            registerButton.disabled = true;
+            registerButton.classList.remove('bg-green-600', 'hover:bg-green-700');
+            registerButton.classList.add('bg-gray-400');
+            loadingIndicator.classList.remove('hidden');
+            updateStatus('Enviando registro al servidor...', 'info');
+
+            try {
+                const response = await fetch(FINAL_REGISTER_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
+                    },
+                    // No necesitamos enviar body, ya que el ID del empleado está en la URL
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.message || `Error del servidor: ${response.status}`);
+                }
+
+                const data = await response.json();
+                
+                // --- MANEJO DEL ÉXITO ---
+                const nombre = data.nombre || 'Empleado';
+                const tipo = data.tipo || 'registro';
+
+                updateStatus(`🎉 Éxito: ${data.message || `Asistencia registrada para ${nombre} (${tipo.toUpperCase()}).`}`, 'success');
+                
+                registerButton.textContent = `✅ REGISTRO DE ${tipo.toUpperCase()} COMPLETADO`;
+                registerButton.disabled = true;
+
+            } catch (error) {
+                console.error('Error durante el registro:', error);
+                const errorMessage = error.message || "Error de red o formato de datos.";
+                
+                updateStatus(`❌ Error de comunicación: ${errorMessage}`, 'error');
+                
+                // Restaurar el botón para que el usuario pueda reintentar
+                registerButton.disabled = false;
+                registerButton.classList.remove('bg-gray-400');
+                registerButton.classList.add('bg-green-600', 'hover:bg-green-700');
+
+            } finally {
+                loadingIndicator.classList.add('hidden');
+            }
+        }
+        
+        // --- INICIALIZACIÓN ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // 1. Verificar el token CSRF al cargar
+            if (!csrfToken) {
+                updateStatus('ERROR GRAVE: El token CSRF no se pudo leer. No se puede registrar la asistencia.', 'error');
+            } else {
+                console.log('[ÉXITO CSRF] Token encontrado.');
+            }
+            
+            // 2. Iniciar la cámara
+            startCamera();
+
+            // 3. Añadir listener al botón de registro
+            registerButton.addEventListener('click', registerAttendance);
+        });
+        
+    </script>
+</body>
+</html>

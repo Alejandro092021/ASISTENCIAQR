@@ -1,67 +1,128 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Escáner de Asistencia QR</title>
     <style>
-        body { font-family: sans-serif; text-align: center; background-color: #f4f4f4; padding-top: 50px; }
-        #qr-reader { width: 500px; margin: auto; border: 5px solid #ccc; }
-        #qr-reader-results { font-size: 1.2em; margin-top: 20px; }
-        .success { color: green; font-weight: bold; }
-        .error { color: red; font-weight: bold; }
+        body { 
+            font-family: 'Inter', sans-serif; 
+            text-align: center; 
+            background-color: #f4f4f4; 
+            padding-top: 50px; 
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 30px;
+        }
+        #qr-reader { 
+            width: 90%; 
+            max-width: 500px; 
+            margin: auto; 
+            border: 5px solid #ccc; 
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            background-color: white;
+        }
+        #qr-reader-results { 
+            font-size: 1.2em; 
+            margin-top: 20px; 
+            padding: 15px;
+            border-radius: 8px;
+            background-color: white;
+            min-height: 30px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+        .success { color: #27ae60; font-weight: bold; }
+        .error { color: #e74c3c; font-weight: bold; }
     </style>
 </head>
 <body>
+    
+    <!-- El token CSRF debe estar en el DOM para que Django lo procese -->
     {% csrf_token %}
 
-    <h1>Terminal de Asistencia</h1>
+    <h1>Terminal de Asistencia QR</h1>
     <div id="qr-reader"></div>
-    <div id="qr-reader-results">Escaneando...</div>
+    <div id="qr-reader-results">Esperando escaneo...</div>
 
     <script src="https://unpkg.com/html5-qrcode@2.0.9/dist/html5-qrcode.min.js"></script>
 
     <script>
-        const resultContainer = document.getElementById('qr-reader-results');
-        // 👇 PASO 2.1: OBTÉN EL TOKEN DEL HTML 👇
-        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
-        let lastResult = null;
-
-        function onScanSuccess(decodedText, decodedResult) {
-            if (decodedText !== lastResult) {
-                lastResult = decodedText;
-                resultContainer.innerHTML = `Escaneado: <span class="success">${decodedText}</span>. Registrando...`;
-                
-                fetch('/api/asistencias/registrar/', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        // 👇 PASO 2.2: AÑADE EL TOKEN A LOS ENCABEZADOS DE LA SOLICITUD 👇
-                        'X-CSRFToken': csrfToken
-                    },
-                    body: JSON.stringify({
-                        empleado_id: decodedText,
-                        tipo: 'entrada'
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        resultContainer.innerHTML = `<span class="error">Error: ${data.error}</span>`;
-                    } else {
-                        resultContainer.innerHTML = `<span class="success">¡Éxito! Asistencia registrada para ${data.nombre_empleado} (ID: ${data.empleado_id})</span>`;
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    resultContainer.innerHTML = `<span class="error">Error de conexión con el servidor.</span>`;
-                });
-
-                setTimeout(() => { lastResult = null; }, 3000);
+        // SOLUCIÓN DEFINITIVA: Ejecutamos el script solo cuando el DOM esté listo.
+        document.addEventListener('DOMContentLoaded', function() {
+            
+            // PRIMER PASO: Obtener el token CSRF de forma segura.
+            const csrfTokenElement = document.querySelector('[name=csrfmiddlewaretoken]');
+            const csrfToken = csrfTokenElement ? csrfTokenElement.value : '';
+            
+            if (!csrfToken) {
+                console.error('Error Crítico: El token CSRF no se pudo obtener. Asegúrese de que el tag {% csrf_token %} esté siendo procesado correctamente por Django.');
             }
-        }
 
-        var html5QrcodeScanner = new Html5QrcodeScanner(
-            "qr-reader", { fps: 10, qrbox: 250 });
-        html5QrcodeScanner.render(onScanSuccess);
+            const resultContainer = document.getElementById('qr-reader-results');
+            let lastResult = null;
+            
+            // URL correcta que espera el ID del QR y realiza la REDIRECCIÓN (no JSON)
+            const PROCESAR_QR_URL = "{% url 'procesar_qr' %}";
+
+            function onScanSuccess(decodedText, decodedResult) {
+                // Evita re-escanear el mismo código en un corto período
+                if (decodedText !== lastResult) {
+                    lastResult = decodedText;
+                    resultContainer.innerHTML = `Escaneado ID: <span class="success">${decodedText}</span>. Validando...`;
+                    
+                    fetch(PROCESAR_QR_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': csrfToken // Usamos la variable global ahora definida
+                        },
+                        body: JSON.stringify({
+                            'qr_data': decodedText 
+                        })
+                    })
+                    .then(response => {
+                        if (response.redirected) {
+                            resultContainer.innerHTML = `<span class="success">QR válido. Redirigiendo a validación facial...</span>`;
+                            window.location.href = response.url;
+                            return;
+                        }
+                        
+                        return response.json().then(data => {
+                            throw new Error(data.error || data.message || `Error ${response.status}: Empleado no encontrado o error del servidor.`);
+                        }).catch(() => {
+                            // Maneja 404/400 que devuelven HTML en lugar de JSON
+                             throw new Error(`Error ${response.status}: Respuesta inesperada del servidor.`);
+                        });
+                    })
+                    .catch(error => {
+                        console.error('Error durante el proceso de QR:', error);
+                        let errorMessage = error.message || "Error de red o comunicación.";
+
+                        if (errorMessage.includes('Failed to fetch')) {
+                            errorMessage = "Error de conexión: El servidor no está respondiendo.";
+                        }
+                        
+                        resultContainer.innerHTML = `<span class="error">❌ Error: ${errorMessage}</span>`;
+                    })
+                    .finally(() => {
+                        setTimeout(() => { lastResult = null; }, 3000);
+                    });
+                }
+            }
+
+            var html5QrcodeScanner = new Html5QrcodeScanner(
+                "qr-reader", { fps: 10, qrbox: 250 });
+            html5QrcodeScanner.render(onScanSuccess);
+
+        }); // FIN: DOMContentLoaded listener
+        
     </script>
 </body>
 </html>

@@ -8,6 +8,8 @@ class Empleado(models.Model):
     nombre = models.CharField(max_length=100)
     dni = models.CharField(max_length=20, unique=True)
     area = models.CharField(max_length=150, blank=True)
+    # 🚨 SOLUCIÓN 1: Agregamos el campo 'foto_perfil' al modelo
+    foto_perfil = models.ImageField(upload_to='fotos_empleados/', blank=True, null=True, verbose_name='Foto de Perfil')
 
     def __str__(self):
         return self.nombre

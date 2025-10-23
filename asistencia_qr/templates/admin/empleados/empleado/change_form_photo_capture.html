@@ -1,0 +1,348 @@
+{% extends "admin/change_form.html" %}
+{% load i18n admin_urls static admin_modify %}
+
+{% block content %}
+    <div id="content-main">
+        {% include "admin/change_form_object_tools.html" %}
+        
+        <form {% if has_file_field %}enctype="multipart/form-data"{% endif %} 
+              action="{{ form_url }}" method="post" id="{{ original.pk|yesno:'empleado_form,empleado_form_add' }}" novalidate>
+            {% csrf_token %}
+            {% if is_popup %}<input type="hidden" name="{{ is_popup_var }}" value="1">{% endif %}
+            {% if to_field %}<input type="hidden" name="{{ to_field_var }}" value="{{ to_field }}">{% endif %}
+
+            <fieldset class="module aligned">
+                <h2>Cámara y Captura de Foto</h2>
+                <div class="form-row field-status-message">
+                    <div id="status-message"></div>
+                </div>
+
+                <div class="form-row field-webcam-controls">
+                    <div>
+                        <label for="start-webcam-btn" class="required">Controles de la Cámara</label>
+                        <div class="d-grid gap-2 mb-3">
+                            <button type="button" class="btn btn-primary" id="start-webcam-btn" onclick="return tryToStartCameraFlow()"> 
+                                ▶️ Activar Cámara / Escanear QR
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-row field-webcam-feed">
+                    <label>Vista Previa de la Cámara/Captura</label>
+                    <div class="webcam-area text-center mb-3">
+                        <video id="webcam-feed" autoplay style="width: 100%; max-width: 320px; height: auto; display: none; margin: 0 auto; border: 2px solid #ccc;"></video>
+                        <canvas id="photo-canvas" style="display: none;"></canvas>
+
+                        <button type="button" class="btn btn-success mt-2" id="capture-btn" disabled style="display: none;">
+                            📸 Tomar Foto
+                        </button>
+                    </div>
+                </div>
+            </fieldset>
+
+            
+            {# CRÍTICO: Renderiza el campo 'foto_perfil' de Django AQUÍ, pero OCULTO. #}
+            <div style="display: none;">
+                {{ adminform.form.foto_perfil }}
+            </div>
+
+
+            {% if errors %}
+                <p class="errornote">
+                    {% if errors|length == 1 %}{% translate "Please correct the error below." %}{% else %}{% translate "Please correct the errors below." %}{% endif %}
+                </p>
+                {{ adminform.form.non_field_errors }}
+            {% endif %}
+
+            {# Renderiza el resto de los Fieldsets #}
+            {% for fieldset in adminform %}
+                {% include "admin/includes/fieldset.html" %}
+            {% endfor %}
+
+            {# BLOQUE DE BOTONES DE ENVÍO MANUALMENTE DEFINIDOS PARA EVITAR EL AUTO-SUBMIT #}
+            {% block submit_buttons_bottom %}
+            <div class="submit-row">
+                {# 🚨 USAMOS 'opts' (inyectado en admin.py) y 'has_delete_permission' #}
+                {% if original and has_delete_permission %}
+                    <p class="deletelink-box"><a href="{% url opts|admin_urlname:'delete' original.pk|admin_urlquote %}{% if is_popup %}?_popup=1{% endif %}" class="deletelink">{% translate "Delete" %}</a></p>
+                {% endif %}
+                
+                <button type="button" class="btn btn-warning" onclick="alert('Formulario Cargado Correctamente! El flujo de la cámara debería ser el siguiente paso.')">
+                    Botón de Prueba
+                </button>
+                
+                <input type="submit" value="{% translate 'Save' %}" class="default" name="_save">
+                
+                {% if not is_popup %}
+                    <input type="submit" value="{% translate 'Save and add another' %}" name="_addanother">
+                    <input type="submit" value="{% translate 'Save and continue editing' %}" name="_continue">
+                {% endif %}
+            </div>
+            {% endblock %}
+            
+        </form>
+    </div>
+{% endblock %}
+
+{# TODO EL JAVASCRIPT SE MUEVE AQUI para garantizar que TODAS las funciones sean accesibles ANTES del onclick #}
+{% block extrahead %} 
+    <script>
+        // =========================================================
+        // 1. VARIABLES GLOBALES
+        // =========================================================
+        let globalRefs = {}; 
+        
+        // =========================================================
+        // 2. FUNCIONES DE UTILIDAD (Definidas primero)
+        // =========================================================
+
+        function showMessage(msg, isError = false) {
+            const container = globalRefs.messageContainer;
+            if (!container) return; 
+            
+            container.innerHTML = '';
+            const div = document.createElement('div');
+            div.innerHTML = msg;
+            div.className = 'alert ' + (isError ? 'alert-danger' : 'alert-success'); 
+            container.appendChild(div);
+            const duration = isError ? 15000 : 5000;
+            if (!isError) {
+                setTimeout(() => div.remove(), duration); 
+            }
+        }
+        function checkSecureContext() { return true; } 
+
+        function initializeCameraUI() {
+            if (globalRefs.videoInitialized) return; 
+            globalRefs.videoInitialized = true;
+            const { startButton, video, captureButton } = globalRefs;
+
+            if (startButton) startButton.style.display = 'none'; 
+            if (video) video.style.display = 'block'; 
+            if (captureButton) {
+                captureButton.style.display = 'block';
+                captureButton.disabled = false;
+                captureButton.textContent = "📸 Tomar Foto";
+                captureButton.style.opacity = 1;
+            }
+            showMessage("Cámara iniciada correctamente. Cuando termine, puede tomar la foto.", false);
+        }
+
+        function startCamera(constraints) {
+            return new Promise((resolve, reject) => {
+                const { video } = globalRefs;
+                if (!video) {
+                    reject(new Error("HTMLElementNotFoundError: El elemento 'video' no se encontró."));
+                    return;
+                }
+                
+                navigator.mediaDevices.getUserMedia(constraints) 
+                    .then(s => {
+                        globalRefs.stream = s;
+                        video.srcObject = s;
+                        video.play();
+                        video.addEventListener('playing', initializeCameraUI, { once: true });
+                        video.onloadedmetadata = function() {
+                            if (video.readyState >= 3) {
+                                setTimeout(() => {
+                                    if (!globalRefs.videoInitialized) {
+                                        console.warn("Forzando inicialización de UI...");
+                                        initializeCameraUI();
+                                    }
+                                }, 5000);
+                            }
+                        }
+                        resolve();
+                    })
+                    .catch(err => {
+                        reject(err);
+                    });
+            });
+        }
+
+        function stopCamera() {
+            const { stream, video, captureButton, startButton } = globalRefs;
+            if (stream) {
+                stream.getTracks().forEach(track => {
+                    if (track.readyState === 'live') {
+                        track.stop();
+                    }
+                });
+                globalRefs.stream = null;
+                globalRefs.videoInitialized = false;
+                if (video) video.style.display = 'none';
+                if (captureButton) captureButton.style.display = 'none';
+                if (startButton) {
+                    startButton.style.display = 'block'; 
+                    startButton.disabled = false;
+                    startButton.textContent = "▶️ Activar Cámara / Escanear QR";
+                }
+            }
+        }
+
+        function handleCameraError(err) {
+            if (globalRefs.stream) stopCamera();
+            const { startButton, captureButton } = globalRefs;
+            
+            let errorName = err.name || (err.message && err.message.includes('TimeoutError') ? 'TimeoutError' : 'ErrorDesconocido');
+            let errorMessage = `❌ **No se pudo iniciar la cámara.** Error: **${errorName}**. `;
+            
+            if (errorName === "NotAllowedError" || errorName === "SecurityError") {
+                errorMessage += "El acceso fue **denegado** por el usuario o bloqueado por el navegador. Recargue y otorgue permiso.";
+            } else if (errorName === "NotFoundError") {
+                errorMessage += "No se encontró ninguna cámara conectada.";
+            } else if (errorName === "NotReadableError") {
+                errorMessage += "La cámara está siendo usada por otra aplicación.";
+            } else if (errorName === "TimeoutError") {
+                    errorMessage = "❌ **Fallo por Tiempo de Espera.** La cámara no respondió en 12 segundos.";
+            } else {
+                errorMessage += `Error desconocido o ${err.message}.`;
+            }
+
+            showMessage(errorMessage, true);
+            if (startButton) {
+                startButton.textContent = "❌ Fallo al iniciar Cámara";
+                startButton.disabled = true;
+            }
+            if (captureButton) captureButton.style.display = 'none';
+        }
+
+        // =========================================================
+        // 3. FUNCIÓN PRINCIPAL (Llamada por el onclick)
+        // =========================================================
+        async function tryToStartCameraFlow() {
+            const currentStartButton = globalRefs.startButton || document.getElementById('start-webcam-btn'); 
+
+            if (!checkSecureContext()) { return false; } 
+            
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showMessage("Tu navegador no soporta la API de cámara.", true);
+                if (currentStartButton) {
+                    currentStartButton.disabled = true;
+                    currentStartButton.textContent = "Cámara No Soportada";
+                }
+                return false; 
+            }
+            
+            if (currentStartButton) {
+                currentStartButton.disabled = true;
+                currentStartButton.textContent = "Cargando...";
+            }
+
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => { reject(new Error("TimeoutError")); }, 12000)
+            );
+
+            const softConstraints = { video: { facingMode: "user", width: { ideal: 320 }, height: { ideal: 240 } } };
+            const minimalConstraints = { video: true };
+
+            try {
+                await Promise.race([startCamera(softConstraints), timeoutPromise]); 
+            } catch (err1) {
+                if (err1.name !== "TimeoutError" && err1.name !== "SecurityError" && err1.name !== "NotAllowedError" && err1.name !== "HTMLElementNotFoundError") {
+                    if (currentStartButton) currentStartButton.textContent = "Intentando con restricciones mínimas...";
+                    try {
+                        await Promise.race([startCamera(minimalConstraints), timeoutPromise]);
+                    } catch (err2) {
+                        handleCameraError(err2);
+                    }
+                } else {
+                    handleCameraError(err1);
+                }
+            }
+            return false; 
+        }
+
+        // =========================================================
+        // 4. INICIALIZACIÓN (Utiliza las funciones definidas arriba)
+        // =========================================================
+        window.initCameraRefs = () => {
+             // Obtención de referencias y almacenamiento en globalRefs
+            globalRefs.video = document.getElementById('webcam-feed');
+            globalRefs.canvas = document.getElementById('photo-canvas');
+            globalRefs.captureButton = document.getElementById('capture-btn');
+            globalRefs.startButton = document.getElementById('start-webcam-btn'); 
+            globalRefs.fotoPerfilInput = document.getElementById('id_foto_perfil'); 
+            globalRefs.form = document.querySelector('form');
+            globalRefs.messageContainer = document.getElementById('status-message');
+            globalRefs.stream = null;
+            globalRefs.videoInitialized = false;
+
+            if (!globalRefs.startButton) {
+                console.warn("Advertencia: El botón 'start-webcam-btn' no se encontró al cargar el DOM.");
+                return; 
+            }
+
+            // FUERZA EL ESTADO INICIAL DEL BOTÓN:
+            globalRefs.startButton.style.display = 'block'; 
+            globalRefs.startButton.disabled = false;
+            globalRefs.startButton.textContent = "▶️ Activar Cámara / Escanear QR";
+
+            // --- Event Listener para el botón de Captura ---
+            if (globalRefs.captureButton) {
+                globalRefs.captureButton.addEventListener('click', function(e) { 
+                    e.preventDefault(); 
+                    const { videoInitialized, stream, canvas, fotoPerfilInput } = globalRefs;
+
+                    if (!videoInitialized || !stream || !canvas || !fotoPerfilInput) {
+                        showMessage("La cámara o los elementos de destino no están listos.", true);
+                        return;
+                    }
+                    
+                    canvas.width = globalRefs.video.videoWidth;
+                    canvas.height = globalRefs.video.videoHeight;
+                    const context = canvas.getContext('2d');
+                    context.drawImage(globalRefs.video, 0, 0, canvas.width, canvas.height);
+                    
+                    canvas.toBlob(function(blob) {
+                        if (blob) {
+                            const fileName = `empleado_capture_${Date.now()}.jpeg`;
+                            const file = new File([blob], fileName, { type: 'image/jpeg' });
+                            
+                            try {
+                                const dataTransfer = new DataTransfer();
+                                dataTransfer.items.add(file);
+                                fotoPerfilInput.files = dataTransfer.files;
+                            } catch (e) {
+                                console.warn("DataTransfer falló. Usando hack de FileList.", e);
+                                const fileList = Object.assign(new Array(1), { 0: file, length: 1 });
+                                fotoPerfilInput.files = fileList;
+                                if (fotoPerfilInput.files.length === 0) {
+                                    showMessage("Error al asignar la foto al campo 'Foto de Perfil'. Pruebe a subir el archivo manualmente.", true);
+                                }
+                            }
+                            
+                            if (globalRefs.captureButton) {
+                                globalRefs.captureButton.textContent = "✅ ¡Foto Capturada! Listo para Guardar";
+                                globalRefs.captureButton.style.backgroundColor = "#28a745";
+                                globalRefs.captureButton.style.opacity = 1;
+                            }
+                            showMessage("Foto capturada y asignada. ¡Guarde el formulario para subirla!", false);
+                            stopCamera(); 
+                            
+                        } else {
+                            showMessage("Error al procesar la imagen capturada (Blob fallido).", true);
+                        }
+                    }, 'image/jpeg', 0.9);
+                });
+            }
+            
+            // Aseguramos que la cámara se detenga y el formulario no se envíe prematuramente
+            if (globalRefs.form) {
+                globalRefs.form.addEventListener('submit', stopCamera); 
+                
+                // Previene el envío al presionar Enter (típica causa de recarga accidental)
+                globalRefs.form.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                    }
+                });
+            }
+            window.addEventListener('beforeunload', stopCamera);
+        };
+        
+        // Ejecuta la inicialización cuando el DOM está listo
+        window.addEventListener('DOMContentLoaded', window.initCameraRefs);
+    </script>
+{% endblock %}
