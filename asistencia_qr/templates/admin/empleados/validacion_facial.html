@@ -1,10 +1,10 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Validación Facial</title>
-    <!-- Incluir Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         /* Estilos base para Inter font */
@@ -23,14 +23,27 @@
             object-fit: cover; /* Asegura que el video cubra el contenedor sin distorsionarse */
             transform: scaleX(-1); /* Espejo horizontal para simular un selfie */
         }
+        /* Estilo para simular el indicador de rostro (opcional, para visualización) */
+        .face-indicator::after {
+            content: "";
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 80%;
+            height: 80%;
+            border: 4px dashed #38bdf8; /* cian-400 */
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            box-sizing: border-box;
+            pointer-events: none;
+            z-index: 10;
+        }
     </style>
 </head>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
 
-    <!-- Se debe incluir el token CSRF para que el JavaScript lo lea y lo envíe en el POST -->
     {% csrf_token %}
 
-    <!-- Tarjeta Principal de Validación -->
     <div id="validation-card" class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md transition-all duration-300 transform scale-100">
         <h1 class="text-3xl font-bold text-gray-800 mb-4 text-center">
             Validación de Asistencia
@@ -39,26 +52,25 @@
         <p class="text-lg text-gray-600 mb-6 text-center">
             Bienvenido, <span id="empleado-nombre" class="font-extrabold text-blue-600">{{ empleado.nombre }}</span>.
         </p>
+        
+        <input type="hidden" id="empleado_id" value="{{ empleado.id }}">
 
-        <!-- Contenedor de la Cámara/Validación -->
-        <div id="video-container" class="bg-gray-800 flex items-center justify-center mb-6 shadow-inner border-2 border-gray-300">
-            <!-- Elemento de video real -->
+        <div id="video-container" class="bg-gray-800 flex items-center justify-center mb-6 shadow-inner border-2 border-gray-300 face-indicator">
             <video id="video-stream" autoplay playsinline class="hidden"></video>
-            <!-- Mensaje de carga inicial -->
             <p id="camera-loading-message" class="text-white font-medium p-4 text-center">
                 Cargando cámara... (Asegúrese de aceptar el permiso)
             </p>
         </div>
+        
+        <canvas id="photo-canvas" class="hidden"></canvas> 
 
-        <!-- Mensaje de Estado (Display Dinámico) -->
         <div id="status-message" class="p-3 mb-6 rounded-lg font-medium text-center bg-blue-100 text-blue-700 border border-blue-300">
             Esperando validación facial...
         </div>
 
-        <!-- Botón de Registro (Activado después de la validación exitosa o de forma manual) -->
         <button id="register-button" 
                 disabled
-                class="w-full py-3 bg-gray-400 text-white font-bold rounded-lg shadow-lg transition duration-150 transform focus:outline-none focus:ring-4 focus:ring-green-300">
+                class="w-full py-3 bg-gray-400 text-white font-bold rounded-lg shadow-lg transition duration-150 transform focus:outline-none focus:ring-4 focus:ring-green-300 cursor-not-allowed">
             Registrar Asistencia
         </button>
         
@@ -69,12 +81,11 @@
     </div>
 
     <script>
-        // La URL de registro es inyectada por Django desde la vista
+        // 🚨 CRÍTICO: Asumiendo que la vista (views.py) envía 'registro_url' en el contexto.
+        // Si no es así, reemplace con: const FINAL_REGISTER_URL = "{% url 'registrar_asistencia_final' empleado_id=empleado.id %}";
         const FINAL_REGISTER_URL = '{{ registro_url | safe }}';
         
-        // Obtenemos el token CSRF (debe existir en la plantilla que llamó a esta vista)
         const csrfTokenElement = document.querySelector('[name=csrfmiddlewaretoken]');
-        // Usamos un operador ternario para una lectura segura, evitando el TypeError
         const csrfToken = csrfTokenElement ? csrfTokenElement.value : '';
 
         const registerButton = document.getElementById('register-button');
@@ -82,12 +93,18 @@
         const loadingIndicator = document.getElementById('loading-indicator');
         const videoElement = document.getElementById('video-stream');
         const cameraMessage = document.getElementById('camera-loading-message');
+        
+        // 🚨 NUEVOS ELEMENTOS DE CAPTURA
+        const canvasElement = document.getElementById('photo-canvas');
+        const empleadoId = document.getElementById('empleado_id').value;
 
         let cameraActive = false;
-        
+        let streamGlobal = null; // Guardar el stream para poder detenerlo
+
         // --- UTILIDAD: Actualiza el estado en la interfaz ---
         function updateStatus(message, type = 'info') {
             statusMsg.textContent = message;
+            // ... (Lógica de clases de Tailwind existente) ...
             statusMsg.className = 'p-3 mb-6 rounded-lg font-medium text-center border transition-colors duration-200';
             
             if (type === 'success') {
@@ -99,6 +116,40 @@
             }
         }
 
+        // --- FUNCIÓN DE CAPTURA: Toma una foto del video y devuelve Base64 ---
+        function captureImage() {
+            if (!videoElement.srcObject) {
+                updateStatus('Error: La cámara no está activa para capturar.', 'error');
+                return null;
+            }
+            
+            // Ajustar canvas al tamaño del video (importante para evitar distorsión)
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+            
+            const context = canvasElement.getContext('2d');
+            
+            // 🚨 CRÍTICO: Dibujar el video con el efecto espejo (si lo está usando)
+            // 1. Mover el punto de inicio a la derecha
+            context.translate(canvasElement.width, 0);
+            // 2. Escalar horizontalmente por -1
+            context.scale(-1, 1);
+            // 3. Dibujar la imagen
+            context.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+            
+            // Devolver la imagen en formato Base64 (JPEG)
+            return canvasElement.toDataURL('image/jpeg', 0.9); // Calidad 0.9
+        }
+
+        // --- FUNCIÓN DE DETENER CÁMARA ---
+        function stopCamera() {
+            if (streamGlobal) {
+                streamGlobal.getTracks().forEach(track => track.stop());
+                videoElement.srcObject = null;
+                cameraActive = false;
+            }
+        }
+
         // --- FUNCIÓN DE INICIALIZACIÓN DE CÁMARA ---
         async function startCamera() {
             if (cameraActive) return;
@@ -107,25 +158,31 @@
                 updateStatus('Cargando cámara...', 'info');
                 cameraMessage.textContent = 'Solicitando permiso de cámara...';
                 
-                // Pedir acceso a la cámara de video
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    }
+                });
                 
-                // Asignar el stream al elemento de video
+                streamGlobal = stream; // Guardar el stream
                 videoElement.srcObject = stream;
+                
                 videoElement.onloadedmetadata = () => {
                     videoElement.play();
-                    // Mostrar video y ocultar mensaje
                     videoElement.classList.remove('hidden');
                     cameraMessage.classList.add('hidden');
                     cameraActive = true;
                     
-                    updateStatus('Cámara activa. Presione "Registrar Asistencia" para continuar.', 'info');
-                    // Simular que la validación facial fue exitosa (Activamos el botón)
+                    updateStatus('Cámara activa. Presione "Registrar Asistencia" para capturar y continuar.', 'info');
+                    
+                    // Activamos el botón ya que la cámara está lista
                     registerButton.disabled = false;
-                    registerButton.classList.remove('bg-gray-400');
+                    registerButton.classList.remove('bg-gray-400', 'cursor-not-allowed');
                     registerButton.classList.add('bg-green-600', 'hover:bg-green-700');
                 };
             } catch (error) {
+                // ... (Lógica de manejo de errores existente) ...
                 console.error('[ERROR CÁMARA]: Error al acceder a la cámara:', error);
                 let errorMessage = 'Error al acceder a la cámara. Asegúrese de que no esté en uso.';
 
@@ -141,31 +198,43 @@
                 // Dejamos el botón deshabilitado si la cámara no funciona
                 registerButton.disabled = true;
                 registerButton.classList.remove('bg-green-600', 'hover:bg-green-700');
-                registerButton.classList.add('bg-gray-400');
+                registerButton.classList.add('bg-gray-400', 'cursor-not-allowed');
             }
         }
 
-        // --- FUNCIÓN DE REGISTRO DE ASISTENCIA ---
+        // --- FUNCIÓN DE REGISTRO DE ASISTENCIA (MODIFICADA) ---
         async function registerAttendance() {
-            if (!csrfToken) {
-                updateStatus('Error de seguridad: Token CSRF no disponible.', 'error');
+            if (!csrfToken || registerButton.disabled) return;
+
+            // 1. CAPTURAR LA IMAGEN
+            const imageData = captureImage();
+            if (!imageData) {
+                updateStatus('❌ Fallo en la captura de la imagen. Intente de nuevo.', 'error');
                 return;
             }
 
+            // 2. INICIAR PROCESO DE POST
             registerButton.disabled = true;
+            registerButton.textContent = 'Procesando Validación Facial y Registro...';
             registerButton.classList.remove('bg-green-600', 'hover:bg-green-700');
             registerButton.classList.add('bg-gray-400');
             loadingIndicator.classList.remove('hidden');
-            updateStatus('Enviando registro al servidor...', 'info');
+            updateStatus('Enviando imagen y registrando al servidor...', 'info');
 
             try {
+                // 3. ENVIAR DATOS (incluyendo la imagen Base64)
                 const response = await fetch(FINAL_REGISTER_URL, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'X-CSRFToken': csrfToken
                     },
-                    // No necesitamos enviar body, ya que el ID del empleado está en la URL
+                    body: JSON.stringify({
+                        empleado_id: empleadoId,
+                        // 🚨 CRÍTICO: La imagen Base64 va aquí
+                        foto_capturada: imageData, 
+                        // Puedes añadir el tipo de asistencia si es relevante, ej: 'tipo': 'entrada'
+                    }),
                 });
 
                 if (!response.ok) {
@@ -176,6 +245,8 @@
                 const data = await response.json();
                 
                 // --- MANEJO DEL ÉXITO ---
+                stopCamera(); // Detenemos la cámara tras el éxito
+                
                 const nombre = data.nombre || 'Empleado';
                 const tipo = data.tipo || 'registro';
 
@@ -183,8 +254,12 @@
                 
                 registerButton.textContent = `✅ REGISTRO DE ${tipo.toUpperCase()} COMPLETADO`;
                 registerButton.disabled = true;
+                
+                // Opcional: Cerrar ventana
+                setTimeout(() => { window.close(); }, 4000);
 
             } catch (error) {
+                // ... (Manejo de errores) ...
                 console.error('Error durante el registro:', error);
                 const errorMessage = error.message || "Error de red o formato de datos.";
                 
@@ -192,6 +267,7 @@
                 
                 // Restaurar el botón para que el usuario pueda reintentar
                 registerButton.disabled = false;
+                registerButton.textContent = 'Registrar Asistencia';
                 registerButton.classList.remove('bg-gray-400');
                 registerButton.classList.add('bg-green-600', 'hover:bg-green-700');
 
@@ -202,18 +278,14 @@
         
         // --- INICIALIZACIÓN ---
         document.addEventListener('DOMContentLoaded', () => {
-            // 1. Verificar el token CSRF al cargar
-            if (!csrfToken) {
-                updateStatus('ERROR GRAVE: El token CSRF no se pudo leer. No se puede registrar la asistencia.', 'error');
-            } else {
-                console.log('[ÉXITO CSRF] Token encontrado.');
-            }
-            
-            // 2. Iniciar la cámara
+            // 1. Iniciar la cámara
             startCamera();
 
-            // 3. Añadir listener al botón de registro
+            // 2. Añadir listener al botón de registro
             registerButton.addEventListener('click', registerAttendance);
+            
+            // 3. Detener la cámara al cerrar la ventana
+            window.addEventListener('beforeunload', stopCamera);
         });
         
     </script>
